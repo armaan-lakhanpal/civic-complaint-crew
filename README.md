@@ -92,10 +92,12 @@ docker run -d --rm --name n8n --network host -v n8n_data:/home/node/.n8n docker.
 Open http://localhost:5678, import `n8n_civic_workflow.json`, set the Postgres credential on
 *Save to notifications* (host `localhost`, database `civic`, user `civic_user`, password `civic123`), then **Publish**.
 
-Optional, for the faster API mode (the key stays in your shell, never in the repo):
+Optional, for the faster API mode: copy `.env.example` to `.env` and put your key in it.
+`.env` is git-ignored, so the key stays on your machine and is never pushed.
 
 ```bash
-export GEMINI_API_KEY=your-key
+cp .env.example .env
+code .env        # set GEMINI_API_KEY=your-key
 ```
 
 ## Running

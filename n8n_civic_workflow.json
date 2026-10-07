@@ -1,0 +1,43 @@
+{
+ "name": "Civic crew notifications",
+ "nodes": [
+  {
+   "id": "ed438af0-81f3-4afc-917a-3a99d5e1cde0",
+   "name": "Webhook",
+   "type": "n8n-nodes-base.webhook",
+   "typeVersion": 2,
+   "position": [0, 0],
+   "webhookId": "28047f95-a3c6-45ce-a87b-d8b784dc35e3",
+   "parameters": {"httpMethod": "POST", "path": "civic-ack", "options": {}}
+  },
+  {
+   "id": "6a0c3b43-d235-4c10-a284-7199fcc687dd",
+   "name": "Format notification",
+   "type": "n8n-nodes-base.code",
+   "typeVersion": 2,
+   "position": [260, 0],
+   "parameters": {
+    "jsCode": "// Turns whatever the crew sends into one clean notification row\nreturn $input.all().map(item => {\n  const b = item.json.body || item.json;\n  if (b.type === 'escalation') {\n    return { json: {\n      channel: 'officer_alert',\n      complaint_id: (b.items || []).map(i => i.complaint_id).join(', '),\n      recipient: 'Level 2 and Level 3 officers',\n      language: 'en',\n      priority: 'escalation',\n      message: b.note,\n      payload: JSON.stringify(b),\n    }};\n  }\n  return { json: {\n    channel: 'citizen_reply',\n    complaint_id: b.complaint_id,\n    recipient: 'Citizen (complaint ' + b.complaint_id + ')',\n    language: b.language,\n    priority: b.priority,\n    message: b.message,\n    payload: JSON.stringify(b),\n  }};\n});"
+   }
+  },
+  {
+   "id": "e0616504-a9a7-40be-a7fa-edd6b30307c0",
+   "name": "Save to notifications",
+   "type": "n8n-nodes-base.postgres",
+   "typeVersion": 2.5,
+   "position": [520, 0],
+   "parameters": {
+    "schema": {"__rl": true, "mode": "list", "value": "public"},
+    "table": {"__rl": true, "mode": "name", "value": "notifications"},
+    "columns": {"mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [], "schema": []},
+    "options": {}
+   }
+  }
+ ],
+ "connections": {
+  "Webhook": {"main": [[{"node": "Format notification", "type": "main", "index": 0}]]},
+  "Format notification": {"main": [[{"node": "Save to notifications", "type": "main", "index": 0}]]}
+ },
+ "settings": {"executionOrder": "v1"},
+ "pinData": {}
+}

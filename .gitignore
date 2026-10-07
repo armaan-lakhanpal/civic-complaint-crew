@@ -1,0 +1,9 @@
+chroma_store/
+data/complaints.csv
+data/complaint_labels.csv
+__pycache__/
+*.pyc
+.venv/
+*Zone.Identifier
+.env
+*.log

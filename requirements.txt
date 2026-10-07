@@ -1,0 +1,10 @@
+crewai[google-genai]==1.15.1
+chromadb==1.1.1
+ollama==0.6.2
+SQLAlchemy==2.0.51
+psycopg2-binary==2.9.13
+pandas==2.3.3
+numpy
+requests
+pydantic
+streamlit==1.65.0

@@ -1,0 +1,11 @@
+Complaints processed      : 5
+Department accuracy       : 100%
+Priority accuracy (routed): 100%
+Duplicates planted        : 1   caught correctly: 1   false alarms: 0
+
+complaint_id language    dept_code    true_dept priority true_priority duplicate_of true_duplicate_of  dept_ok
+    GGN-0481       en   SANITATION   SANITATION   normal        normal     GGN-0466          GGN-0466     True
+    GGN-0482       hi        WATER        WATER   normal        normal         None              None     True
+    GGN-0484       en        SEWER        SEWER   normal        normal         None              None     True
+    GGN-0495       hi HORTICULTURE HORTICULTURE     high          high         None              None     True
+    GGN-0499       en   ELECTRICAL   ELECTRICAL critical      critical         None              None     True

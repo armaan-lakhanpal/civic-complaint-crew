@@ -1,0 +1,12 @@
+{
+  "ollama_url": "http://localhost:11434",
+  "llm_model": "qwen2.5:latest",
+  "embed_model": "bge-m3:latest",
+  "pg_url": "postgresql+psycopg2://civic_user:civic123@localhost:5432/civic",
+  "chroma_dir": "/home/armaan/aaba_crewai_p1/civic_crew/chroma_store",
+  "n8n_webhook": "http://localhost:5678/webhook/civic-ack",
+  "api_model": "gemini/gemini-flash-lite-latest",
+  "api_fallbacks": [
+    "gemini/gemini-flash-latest"
+  ]
+}

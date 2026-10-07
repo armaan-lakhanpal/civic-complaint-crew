@@ -11,7 +11,7 @@ Usage (inside ~/aaba_crewai_p1/civic_crew with crewai_env active):
     python 02_crew.py --test-llm              check the model answers
     python 02_crew.py --limit 3               process the 3 oldest new complaints (local model)
     python 02_crew.py --ids GGN-0485 GGN-0488 process specific complaints
-    python 02_crew.py --llm api --limit 20    same, using OpenAI (export OPENAI_API_KEY first)
+    python 02_crew.py --llm api --limit 20    same, using the API model in config.json (key in .env)
     python 02_crew.py --sla                   run the SLA monitor
     python 02_crew.py --evaluate              compare decisions with the answer key
     python 02_crew.py --reset                 undo all crew decisions so you can demo again
@@ -49,12 +49,25 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 # Shared setup
 # =====================================================================
 PROJECT_DIR = Path(__file__).resolve().parent
+
+# API keys live in a local .env file next to this script (git-ignored, never pushed).
+try:
+    from dotenv import load_dotenv
+    load_dotenv(PROJECT_DIR / ".env", override=False)
+except ImportError:
+    pass
 CONFIG = json.loads((PROJECT_DIR / "config.json").read_text())
+
+# WSL runs on UTC; deadlines must be shown in the city's local time (Python and every DB session).
+TIMEZONE = CONFIG.get("timezone", "Asia/Kolkata")
+os.environ["TZ"] = TIMEZONE
+time.tzset()
+
 LOCAL_MODEL = CONFIG.get("local_model", "civic-qwen")
 API_MODEL = CONFIG.get("api_model", "gpt-4o-mini")
 VERBOSE = False
 
-engine = create_engine(CONFIG["pg_url"])
+engine = create_engine(CONFIG["pg_url"], connect_args={"options": f"-c timezone={TIMEZONE}"})
 oc = ollama.Client(host=CONFIG["ollama_url"])
 chroma = chromadb.PersistentClient(path=CONFIG["chroma_dir"])
 charter_col = chroma.get_collection("citizen_charter")
@@ -72,6 +85,13 @@ def run_sql(sql, **params):
         conn.execute(text(sql), params)
 
 
+try:  # sessions opened by n8n get the same timezone (stamps on notifications)
+    with engine.begin() as _conn:
+        _db = _conn.execute(text("SELECT current_database()")).scalar()
+        _conn.execute(text(f"ALTER DATABASE \"{_db}\" SET timezone TO '{TIMEZONE}'"))
+except Exception:
+    pass
+
 DEPTS = q("SELECT * FROM departments").set_index("dept_code").to_dict("index")
 DEPT_CODES = list(DEPTS)
 DEPT_HINTS = {
@@ -82,8 +102,8 @@ DEPT_HINTS = {
     "ELECTRICAL": "streetlights, poles, live wires",
     "HORTICULTURE": "trees, parks, pruning",
 }
-LOCALITIES = q("SELECT DISTINCT locality FROM complaints").locality.tolist()
-LANDMARKS = q("SELECT DISTINCT landmark FROM complaints").landmark.tolist()
+LOCALITIES = [x for x in q("SELECT DISTINCT locality FROM complaints").locality.tolist() if x]
+LANDMARKS = [x for x in q("SELECT DISTINCT landmark FROM complaints").landmark.tolist() if x]
 PRIORITIES = ["critical", "high", "normal"]
 
 HINGLISH_WORDS = {"mein", "ke", "paas", "nahi", "hai", "hain", "se", "din", "aa", "raha", "rahe", "kooda",
@@ -166,7 +186,8 @@ def make_llm(mode):
         # api_model in config.json decides the provider, e.g. "gpt-4o-mini" or "gemini/gemini-flash-latest"
         key_var = "GEMINI_API_KEY" if API_MODEL.startswith("gemini/") else "OPENAI_API_KEY"
         if not os.getenv(key_var) and not (key_var == "GEMINI_API_KEY" and os.getenv("GOOGLE_API_KEY")):
-            raise SystemExit(f"Set your key first:  export {key_var}=...")
+            raise SystemExit(f"API key missing: add {key_var}=your-key to the .env file in the project "
+                             "folder, then restart the app")
         return LLM(model=API_MODEL, temperature=0.1)
     return LLM(model=f"ollama/{LOCAL_MODEL}", base_url=CONFIG["ollama_url"], temperature=0.1)
 
@@ -382,7 +403,7 @@ reason: one sentence
 
         # Guardrail: the database confirms rule CC-5.1 exactly
         since = pd.Timestamp(s.created_at) - pd.Timedelta(hours=72)
-        rule_hits = q("""
+        rule_hits = [] if not d["landmark"] else q("""
             SELECT complaint_id FROM complaints
             WHERE status IN ('open', 'in_progress') AND locality = :loc AND landmark = :lm
               AND dept_code = :dept AND created_at >= :since AND complaint_id <> :c
@@ -394,7 +415,8 @@ reason: one sentence
         if agent_parent and agent_parent in rule_hits:
             s.duplicate_of, verdict = agent_parent, "agent decision confirmed by rule check"
         elif agent_parent and not rule_hits:
-            verdict = f"agent said duplicate of {agent_parent}, overridden: rule CC-5.1 not met"
+            verdict = (f"agent said duplicate of {agent_parent}, overridden: rule CC-5.1 not met"
+                       + ("" if d["landmark"] else " (no landmark given)"))
         elif rule_hits:
             s.duplicate_of = rule_hits[0]
             verdict = f"agent missed it, rule check found {rule_hits[0]}" if not agent_parent else \
@@ -485,7 +507,7 @@ reason: one sentence
 
         run_sql("UPDATE complaints SET status = 'open', dept_code = :d, priority = :p WHERE complaint_id = :c",
                 d=dept, p=prio, c=s.complaint_id)
-        complaint_col.add(ids=[s.complaint_id], documents=[s.text], embeddings=embed([s.text]),
+        complaint_col.upsert(ids=[s.complaint_id], documents=[s.text], embeddings=embed([s.text]),
                           metadatas=[{"locality": d["locality"], "landmark": d["landmark"], "dept_code": dept,
                                       "status": "open", "created_ts": int(pd.Timestamp(s.created_at).timestamp())}])
         log_action(s.complaint_id, "router", "routed",
@@ -672,6 +694,19 @@ def evaluate():
 
 def reset():
     chat_ids = q("SELECT complaint_id FROM complaints WHERE channel = 'citizen_chat'").complaint_id.tolist()
+    # Department app status changes on synthetic complaints: restore the status each had before the first change
+    dept = q("""SELECT DISTINCT ON (a.complaint_id) a.complaint_id, a.detail, c.text, c.locality, c.landmark,
+                       c.dept_code, c.created_at
+                FROM agent_actions a JOIN complaints c USING (complaint_id)
+                WHERE a.agent = 'department' AND c.channel <> 'citizen_chat'
+                ORDER BY a.complaint_id, a.action_id""")
+    for r in dept.itertuples():
+        before = (r.detail or {}).get("from", "open")
+        run_sql("UPDATE complaints SET status = :s, resolved_at = NULL WHERE complaint_id = :c",
+                s=before, c=r.complaint_id)
+        complaint_col.upsert(ids=[r.complaint_id], documents=[r.text], embeddings=embed([r.text]),
+                             metadatas=[{"locality": r.locality, "landmark": r.landmark, "dept_code": r.dept_code,
+                                         "status": before, "created_ts": int(pd.Timestamp(r.created_at).timestamp())}])
     ids = q("SELECT DISTINCT complaint_id FROM agent_actions WHERE agent = 'intake'").complaint_id.tolist()
     run_sql("""UPDATE complaints SET status = 'new', dept_code = NULL, priority = NULL, duplicate_of = NULL
                WHERE complaint_id IN (SELECT DISTINCT complaint_id FROM agent_actions WHERE agent = 'intake')""")
@@ -683,7 +718,7 @@ def reset():
     if stale:
         complaint_col.delete(ids=stale)
     print(f"Reset done: {len(ids)} complaints set back to 'new', {len(chat_ids)} chat complaints removed, "
-          "escalations, action log and notifications cleared.")
+          f"{len(dept)} department status changes undone, escalations, action log and notifications cleared.")
     print("(Priority raised by CC-5.3 on a parent is not reverted. Re-run 01 for a fully clean dataset.)")
 
 

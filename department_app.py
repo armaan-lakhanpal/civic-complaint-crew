@@ -53,7 +53,6 @@ def load_complaints():
 df = load_complaints()
 view = df if dept_choice == "ALL" else df[df.dept_code == dept_choice]
 open_ = view[view.status.isin(["open", "in_progress"])]
-today = pd.Timestamp.now().normalize()
 ai_ids = set(crew.q("SELECT DISTINCT complaint_id FROM agent_actions WHERE agent = 'intake'").complaint_id)
 
 st.title("Civic Operations Dashboard")
@@ -94,11 +93,14 @@ with tab_board:
         row = df[df.complaint_id == pick].iloc[0]
         msg = (f"Update on complaint {pick}: the {row.department} department has marked it "
                f"{'resolved' if new_status == 'resolved' else 'in progress'}.")
-        crew.log_action(pick, "department", f"status_{new_status}", {"by": dept_choice})
+        crew.log_action(pick, "department", f"status_{new_status}",
+                        {"by": dept_choice, "from": str(df.loc[df.complaint_id == pick, "status"].iloc[0])})
         sent = crew.send_to_n8n({"type": "status_update", "complaint_id": pick, "language": "en",
                                  "priority": row.priority, "message": msg})
-        st.success(f"{pick} marked {new_status}. Citizen notified via n8n: {'yes' if sent else 'no'}")
+        st.session_state.flash = f"{pick} marked {new_status}. Citizen notified via n8n: {'yes' if sent else 'no'}"
         st.rerun()
+    if st.session_state.get("flash"):
+        st.success(st.session_state.pop("flash"))
 
 # ---------------------------------------------------------------- charts
 with tab_charts:

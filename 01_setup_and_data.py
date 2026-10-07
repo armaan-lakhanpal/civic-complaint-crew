@@ -27,7 +27,7 @@ import pandas as pd
 import requests
 from sqlalchemy import create_engine, text
 
-PROJECT_DIR = Path.home() / "aaba_crewai_p1" / "civic_crew"
+PROJECT_DIR = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_DIR / "data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -38,8 +38,22 @@ CONFIG = {
     "pg_url": "postgresql+psycopg2://civic_user:civic123@localhost:5432/civic",
     "chroma_dir": str(PROJECT_DIR / "chroma_store"),
     "n8n_webhook": "http://localhost:5678/webhook/civic-ack",
+    "local_model": "civic-qwen",
+    "api_model": "gemini/gemini-flash-latest",
+    "api_fallbacks": ["gemini/gemini-flash-lite-latest"],
+    "timezone": "Asia/Kolkata",
 }
-(PROJECT_DIR / "config.json").write_text(json.dumps(CONFIG, indent=2))
+_cfg_path = PROJECT_DIR / "config.json"
+if _cfg_path.exists():  # keep settings already chosen (models, webhook); always refresh the local path
+    _saved = json.loads(_cfg_path.read_text())
+    _saved.pop("chroma_dir", None)
+    CONFIG.update(_saved)
+_cfg_path.write_text(json.dumps(CONFIG, indent=2))
+
+# WSL runs on UTC; generate and stamp everything in the city's local time
+import time as _time
+os.environ["TZ"] = CONFIG.get("timezone", "Asia/Kolkata")
+_time.tzset()
 RANDOM_SEED = 42
 print("Project folder:", PROJECT_DIR)
 
@@ -52,7 +66,7 @@ models = [m["name"] for m in tags["models"]]
 for m in (CONFIG["llm_model"], CONFIG["embed_model"]):
     print(("OK       " if m in models else "MISSING  ") + m)
 
-engine = create_engine(CONFIG["pg_url"])
+engine = create_engine(CONFIG["pg_url"], connect_args={"options": f"-c timezone={os.environ['TZ']}"})
 with engine.connect() as conn:
     print(conn.execute(text("select version()")).scalar())
 

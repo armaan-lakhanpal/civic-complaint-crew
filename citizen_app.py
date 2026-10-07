@@ -6,6 +6,7 @@ agents handle it live. They can also track any complaint by its ID.
 """
 import datetime as dt
 import importlib.util
+import re
 import threading
 import time
 from pathlib import Path
@@ -39,6 +40,12 @@ def use_model(mode):
 def next_complaint_id():
     n = crew.q("SELECT max(substring(complaint_id from 5)::int) AS n FROM complaints").n[0]
     return f"GGN-{int(n or 0) + 1:04d}"
+
+
+def mentioned(names, text):
+    """The longest known place name written in the message (whole words only), or None."""
+    hits = [n for n in names if re.search(r"(?<!\w)" + re.escape(n) + r"(?!\w)", text, re.I)]
+    return max(hits, key=len) if hits else None
 
 
 def save_complaint(text, locality, landmark):
@@ -149,15 +156,20 @@ if prompt:
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    text = prompt
-    if locality.lower() not in prompt.lower():
-        text += f" ({locality}" + (f", near {landmark})" if landmark != "Not sure" else ")")
-    lm = landmark if landmark != "Not sure" else ""
+    # What the citizen wrote wins over the sidebar; the sidebar only fills in what is missing.
+    loc_in_text = mentioned(crew.LOCALITIES, prompt)
+    lm_in_text = mentioned(crew.LANDMARKS, prompt)
+    used_loc = loc_in_text or locality
+    lm = lm_in_text or (landmark if landmark != "Not sure" else "")
+    extra = ([] if loc_in_text else [used_loc]) + ([] if lm_in_text or not lm else [f"near {lm}"])
+    text = prompt + (f" ({', '.join(extra)})" if extra else "")
 
     use_model(mode)
-    cid = save_complaint(text, locality, lm)
+    cid = save_complaint(text, used_loc, lm)
     with st.chat_message("assistant"):
         st.markdown(f"Complaint registered as **{cid}**.")
+        if (loc_in_text and loc_in_text != locality) or (lm_in_text and lm_in_text != landmark):
+            st.caption(f"Using the place from your message: {used_loc}" + (f", near {lm}" if lm else ""))
         result = run_with_live_progress(cid)
         if "error" in result:
             reply = f"Sorry, something went wrong while processing {cid}: `{result['error']}`"
@@ -166,6 +178,6 @@ if prompt:
             reply = s.message
             facts = (f"Linked to **{s.duplicate_of}**" if s.duplicate_of
                      else f"{crew.DEPTS[s.dept_code]['dept_name']} · priority **{s.priority}**")
-            reply += f"\n\n<small>{facts} · target {s.due_at[:16]}</small>"
-        st.markdown(reply, unsafe_allow_html=True)
+            reply += f"\n\n{facts} · target {s.due_at[:16]}"
+        st.markdown(reply)
     st.session_state.chat.append({"role": "assistant", "content": f"Complaint **{cid}**: {reply}"})
